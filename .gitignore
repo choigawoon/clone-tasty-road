@@ -1,0 +1,16 @@
+# --- Secrets: these hold an MSW MCP bearer token. Recreate locally; never commit. ---
+.mcp.json
+.codex/config.toml
+
+# --- Local per-machine Claude Code settings ---
+.claude/settings.local.json
+
+# --- MSW local runtime / logs ---
+.mswai/
+
+# --- OS cruft ---
+.DS_Store
+**/.DS_Store
+
+# --- Scratch / scratch builder dumps ---
+.builder-work/inspect.cjs

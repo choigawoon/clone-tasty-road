@@ -1,0 +1,434 @@
+@Component
+@ExecSpace("ClientOnly")
+script MergeBoardController extends Component
+
+    -- ============ Injected UI references (UUIDs filled by UIBuilder bind) ============
+    property Entity boardArea = "4d6f72e4-91af-4569-9565-73b9b42b39f6"              -- grid container; items are its children
+    property Entity itemTemplate = "8f2d6e74-2068-4fbc-9719-f35c903d85b0"           -- hidden draggable item, cloned per board item
+    property ButtonComponent spawnerBtn = "9582e809-91d9-427e-9b3b-861d85bd8887"    -- tap to produce a base ingredient
+    property SpriteGUIRendererComponent spawnerSprite = "bed90006-9ba6-4a86-a45e-f4f20a4d7204" -- spawner icon
+    property TextComponent coinText = "08c95118-d611-4cdc-8115-3d059630fa47"
+    property TextComponent energyText = "490a23cb-057f-4a60-81e8-395f45c56234"
+    property SpriteGUIRendererComponent energyFill = "43fe9c36-1f07-4cf6-842d-535ebff38548"  -- Filled bar
+    property Entity orderBar = "512c7a4e-fbd6-4d78-8ac1-0e113664d9f9"               -- order-card container
+    property Entity orderCardTemplate = "6cee1bbc-8c5d-4d59-946d-bb305915df1c"      -- hidden order card, cloned per order
+    property TextComponent statusText = "409fbb5e-5173-41de-a6d1-4a40c5f00abf"      -- footer feedback line
+
+    -- ============ Tunables ============
+    property integer COLS = 7
+    property integer ROWS = 7
+    property number CELL = 132                  -- cell step in UI px
+    property integer SPAWNER_R = 6
+    property integer SPAWNER_C = 3
+    property integer ENERGY_MAX = 20
+    property number ENERGY_REGEN = 10           -- seconds per +1 energy
+    property integer SPAWN_COST = 1
+    property integer ORDER_SLOTS = 3
+
+    -- ============ Runtime state (client only, not synced) ============
+    property any regenTimer = nil
+    property any spawnerHandler = nil
+    property any config = nil
+    property any board = nil
+    property any items = nil
+    property any orders = nil
+    property integer itemSeq = 0
+    property integer coins = 0
+    property integer energy = 0
+
+    method void OnBeginPlay()
+        -- Entry point: build config, init board/orders/energy, wire spawner, start regen.
+        log("[Merge] OnBeginPlay start v2")
+        self.config = self:BuildConfig()
+        self.board = {}                 -- board[idx] = record | nil  (idx = r*COLS + c)
+        self.items = {}                 -- itemId -> record
+        self.itemSeq = 0
+        self.orders = {}                -- slotIndex -> order
+        self.coins = 0
+        self.energy = self.ENERGY_MAX
+
+        -- hide templates so only clones are visible
+        if isvalid(self.itemTemplate) then self.itemTemplate:SetEnable(false) end
+        if isvalid(self.orderCardTemplate) then self.orderCardTemplate:SetEnable(false) end
+
+        -- spawner visuals + click
+        if isvalid(self.spawnerSprite) then
+            self:SetSprite(self.spawnerSprite, self.config.spawner.icon)
+        end
+        if isvalid(self.spawnerBtn) then
+            self.spawnerHandler = self.spawnerBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnSpawnerClick)
+        end
+
+        self:UpdateCoin()
+        self:UpdateEnergy()
+        self:ShowMsg("화로를 눌러 재료를 만들고, 같은 재료를 합쳐보세요!")
+
+        -- initial orders
+        for i = 1, self.ORDER_SLOTS do
+            self:GenerateOrder(i)
+        end
+
+        -- energy regeneration timer
+        self.regenTimer = _TimerService:SetTimerRepeat(self.OnRegenTick, self.ENERGY_REGEN)
+
+        log("[Merge] OnBeginPlay done | energy=" .. tostring(self.energy) .. " orders=" .. tostring(#self.orders))
+    end
+
+    method table BuildConfig()
+        -- Returns merge-chain + spawner + reward config. Single food chain for MVP.
+        local cfg = {}
+        cfg.chains = {
+            food = {
+                name = "푸드",
+                tierNames = { "사과", "빵", "햄버거", "피자", "케이크" },
+                tiers = {
+                    "263b7db3067545a7acf7bbe5c3b61a4c",   -- T1 사과
+                    "15baa6d07f77442ab47a1526b26b5cd6",   -- T2 빵
+                    "7dc29f14c2c6486badbd5688cf8103a3",   -- T3 햄버거
+                    "a452cf22cd1c4bf8ae877cb61e153814",   -- T4 피자
+                    "7d42def25d6347ce9cc41976fb18a364",   -- T5 케이크
+                },
+            },
+        }
+        cfg.spawner = {
+            chain = "food",
+            icon = "e3aaa0ed27d24d6faf044b648b58cd2b",     -- 휴대용 화로
+            energyCost = self.SPAWN_COST,
+        }
+        return cfg
+    end
+
+    -- ============ Geometry helpers ============
+    method integer IndexOf(integer r, integer c)
+        -- Flattened board index for (row, col).
+        return r * self.COLS + c
+    end
+
+    method boolean IsSpawnerCell(integer r, integer c)
+        -- The spawner permanently occupies one cell; it is never a drop target.
+        return r == self.SPAWNER_R and c == self.SPAWNER_C
+    end
+
+    method Vector2 CellCenter(integer r, integer c)
+        -- anchoredPosition of a cell center, relative to BoardArea center.
+        local x = (c - (self.COLS - 1) / 2) * self.CELL
+        local y = ((self.ROWS - 1) / 2 - r) * self.CELL
+        return Vector2(x, y)
+    end
+
+    method integer ClampInt(integer v, integer lo, integer hi)
+        -- Clamp helper.
+        if v < lo then return lo end
+        if v > hi then return hi end
+        return v
+    end
+
+    -- ============ Sprite helper ============
+    method void SetSprite(SpriteGUIRendererComponent comp, string ruid)
+        -- Assign a sprite RUID to a UI renderer via the DataRef constructor.
+        local ref = DataRef(ruid)
+        comp.ImageRUID = ref
+    end
+
+    method string TierRuid(string chain, integer tier)
+        -- RUID for a chain tier.
+        return self.config.chains[chain].tiers[tier]
+    end
+
+    method integer MaxTier(string chain)
+        -- Highest tier in a chain.
+        return #self.config.chains[chain].tiers
+    end
+
+    -- ============ Item spawning ============
+    method void OnSpawnerClick()
+        -- Spend energy to drop a tier-1 ingredient into a free cell.
+        log("[Merge] spawner clicked | energy=" .. tostring(self.energy))
+        if self.energy < self.config.spawner.energyCost then
+            self:ShowMsg("에너지가 부족해요! 잠시 기다려 주세요.")
+            return
+        end
+        local idx = self:FindEmptyCell()
+        if idx < 0 then
+            self:ShowMsg("보드가 가득 찼어요!")
+            return
+        end
+        local r = idx // self.COLS
+        local c = idx % self.COLS
+        self.energy = self.energy - self.config.spawner.energyCost
+        self:UpdateEnergy()
+        self:SpawnItem(self.config.spawner.chain, 1, r, c)
+        log("[Merge] spawned tier1 at (" .. tostring(r) .. "," .. tostring(c) .. ")")
+    end
+
+    method integer FindEmptyCell()
+        -- Returns the flattened index of a free non-spawner cell, or -1 if full.
+        for r = 0, self.ROWS - 1 do
+            for c = 0, self.COLS - 1 do
+                if not self:IsSpawnerCell(r, c) and self.board[self:IndexOf(r, c)] == nil then
+                    return self:IndexOf(r, c)
+                end
+            end
+        end
+        return -1
+    end
+
+    method void SpawnItem(string chain, integer tier, integer r, integer c)
+        -- Clone the item template, place it at a cell and wire drag handling.
+        self.itemSeq = self.itemSeq + 1
+        local name = "Item_" .. tostring(self.itemSeq)
+        local e = self.itemTemplate:Clone(name)
+        e:SetEnable(true)
+
+        local rec = {}
+        rec.id = e.Id
+        rec.entity = e
+        rec.chain = chain
+        rec.tier = tier
+        rec.row = r
+        rec.col = c
+
+        self:ApplyItemVisual(rec)
+        local center = self:CellCenter(r, c)
+        e.UITransformComponent.anchoredPosition = center
+
+        self.board[self:IndexOf(r, c)] = rec
+        self.items[rec.id] = rec
+
+        rec.beginH = e:ConnectEvent(UITouchBeginDragEvent, self.OnItemBeginDrag)
+        rec.dragH = e:ConnectEvent(UITouchDragEvent, self.OnItemDrag)
+        rec.endH = e:ConnectEvent(UITouchEndDragEvent, self.OnItemEndDrag)
+    end
+
+    method void ApplyItemVisual(table rec)
+        -- Set the item sprite to match its current chain/tier.
+        local sprite = rec.entity.SpriteGUIRendererComponent
+        self:SetSprite(sprite, self:TierRuid(rec.chain, rec.tier))
+    end
+
+    method void RemoveItem(table rec)
+        -- Disconnect handlers, clear from board, destroy entity.
+        if rec == nil then return end
+        local e = rec.entity
+        if isvalid(e) then
+            if rec.beginH then e:DisconnectEvent(UITouchBeginDragEvent, rec.beginH) end
+            if rec.dragH then e:DisconnectEvent(UITouchDragEvent, rec.dragH) end
+            if rec.endH then e:DisconnectEvent(UITouchEndDragEvent, rec.endH) end
+        end
+        if self.board[self:IndexOf(rec.row, rec.col)] == rec then
+            self.board[self:IndexOf(rec.row, rec.col)] = nil
+        end
+        self.items[rec.id] = nil
+        if isvalid(e) then e:Destroy() end
+    end
+
+    -- ============ Drag handling ============
+    method void OnItemBeginDrag(UITouchBeginDragEvent event)
+        -- Lift the dragged item above its siblings.
+        local rec = self.items[event.Entity.Id]
+        if rec == nil then return end
+        _UILogic:SetSiblingIndex(rec.entity.UITransformComponent, 1000000)
+    end
+
+    method void OnItemDrag(UITouchDragEvent event)
+        -- Follow the pointer by accumulating the touch delta.
+        local rec = self.items[event.Entity.Id]
+        if rec == nil then return end
+        local t = rec.entity.UITransformComponent
+        local p = t.anchoredPosition
+        t.anchoredPosition = Vector2(p.x + event.TouchDelta.x, p.y + event.TouchDelta.y)
+    end
+
+    method void OnItemEndDrag(UITouchEndDragEvent event)
+        -- Resolve drop into the nearest cell (move / merge / swap / snap back).
+        local rec = self.items[event.Entity.Id]
+        if rec == nil then return end
+        local p = rec.entity.UITransformComponent.anchoredPosition
+        local c = self:ClampInt(math.floor(p.x / self.CELL + 0.5) + (self.COLS - 1) / 2, 0, self.COLS - 1)
+        local r = self:ClampInt((self.ROWS - 1) / 2 - math.floor(p.y / self.CELL + 0.5), 0, self.ROWS - 1)
+        self:ResolveDrop(rec, r, c)
+    end
+
+    method void SnapHome(table rec)
+        -- Return an item to its own cell center.
+        rec.entity.UITransformComponent.anchoredPosition = self:CellCenter(rec.row, rec.col)
+    end
+
+    method void MoveItemTo(table rec, integer r, integer c)
+        -- Move an item record to a new (empty) cell.
+        self.board[self:IndexOf(rec.row, rec.col)] = nil
+        rec.row = r
+        rec.col = c
+        self.board[self:IndexOf(r, c)] = rec
+        rec.entity.UITransformComponent.anchoredPosition = self:CellCenter(r, c)
+    end
+
+    method void ResolveDrop(table rec, integer r, integer c)
+        -- Core merge logic.
+        if self:IsSpawnerCell(r, c) or (r == rec.row and c == rec.col) then
+            self:SnapHome(rec)
+            return
+        end
+        local target = self.board[self:IndexOf(r, c)]
+        if target == nil then
+            self:MoveItemTo(rec, r, c)
+            return
+        end
+        -- occupied
+        if target.chain == rec.chain and target.tier == rec.tier and target.tier < self:MaxTier(rec.chain) then
+            -- MERGE: upgrade target, consume dragged
+            target.tier = target.tier + 1
+            self:ApplyItemVisual(target)
+            self:RemoveItem(rec)
+            self:ShowMsg(self.config.chains[target.chain].tierNames[target.tier] .. " 완성!")
+            log("[Merge] merged -> tier " .. tostring(target.tier) .. " at (" .. tostring(r) .. "," .. tostring(c) .. ")")
+        else
+            -- SWAP positions
+            local sr = rec.row
+            local sc = rec.col
+            self.board[self:IndexOf(sr, sc)] = target
+            target.row = sr
+            target.col = sc
+            target.entity.UITransformComponent.anchoredPosition = self:CellCenter(sr, sc)
+            rec.row = r
+            rec.col = c
+            self.board[self:IndexOf(r, c)] = rec
+            rec.entity.UITransformComponent.anchoredPosition = self:CellCenter(r, c)
+        end
+    end
+
+    -- ============ Energy ============
+    method void OnRegenTick()
+        -- Regenerate one energy point up to the cap.
+        if self.energy < self.ENERGY_MAX then
+            self.energy = self.energy + 1
+            self:UpdateEnergy()
+        end
+    end
+
+    method void UpdateEnergy()
+        -- Refresh the energy bar fill + label.
+        if isvalid(self.energyFill) then
+            self.energyFill.FillAmount = self.energy / self.ENERGY_MAX
+        end
+        if isvalid(self.energyText) then
+            self.energyText.Text = tostring(self.energy) .. " / " .. tostring(self.ENERGY_MAX)
+        end
+    end
+
+    method void UpdateCoin()
+        -- Refresh the coin label.
+        if isvalid(self.coinText) then
+            self.coinText.Text = tostring(self.coins)
+        end
+    end
+
+    method void ShowMsg(string msg)
+        -- Footer feedback line.
+        if isvalid(self.statusText) then
+            self.statusText.Text = msg
+        end
+        log("[Merge][msg] " .. msg)
+    end
+
+    -- ============ Orders ============
+    method void GenerateOrder(integer slot)
+        -- Create an order requesting a mid/high tier dish; clone a card into the order bar.
+        local chain = "food"
+        local maxT = self:MaxTier(chain)
+        local tier = _UtilLogic:RandomIntegerRange(2, maxT)
+        local reward = tier * 25
+
+        local card = self.orderCardTemplate:Clone("Order_" .. tostring(slot))
+        card:SetEnable(true)
+        local cardW = 300
+        card.UITransformComponent.anchoredPosition = Vector2((slot - (self.ORDER_SLOTS + 1) / 2) * (cardW + 20), 0)
+
+        local order = {}
+        order.slot = slot
+        order.chain = chain
+        order.tier = tier
+        order.reward = reward
+        order.card = card
+
+        -- card visuals: icon child + reward text child
+        local icon = card:GetChildByName("Icon", true)
+        if isvalid(icon) then
+            self:SetSprite(icon.SpriteGUIRendererComponent, self:TierRuid(chain, tier))
+        end
+        local rewardText = card:GetChildByName("Reward", true)
+        if isvalid(rewardText) then
+            rewardText.TextComponent.Text = "+" .. tostring(reward)
+        end
+        local nameText = card:GetChildByName("Name", true)
+        if isvalid(nameText) then
+            nameText.TextComponent.Text = self.config.chains[chain].tierNames[tier]
+        end
+
+        order.clickH = card:ConnectEvent(ButtonClickEvent, function() self:FulfillOrder(order) end)
+        self.orders[slot] = order
+        log("[Merge] order slot " .. tostring(slot) .. " wants tier " .. tostring(tier))
+    end
+
+    method table FindBoardItem(string chain, integer tier)
+        -- First board item matching chain+tier, or nil.
+        for r = 0, self.ROWS - 1 do
+            for c = 0, self.COLS - 1 do
+                local rec = self.board[self:IndexOf(r, c)]
+                if rec ~= nil and rec.chain == chain and rec.tier == tier then
+                    return rec
+                end
+            end
+        end
+        return nil
+    end
+
+    method void FulfillOrder(table order)
+        -- Deliver a matching board item: consume it, pay the reward, refresh the order.
+        log("[Merge] fulfill attempt slot " .. tostring(order.slot) .. " tier " .. tostring(order.tier))
+        local rec = self:FindBoardItem(order.chain, order.tier)
+        if rec == nil then
+            self:ShowMsg(self.config.chains[order.chain].tierNames[order.tier] .. "(이)가 보드에 없어요!")
+            return
+        end
+        self:RemoveItem(rec)
+        self.coins = self.coins + order.reward
+        self:UpdateCoin()
+        self:ShowMsg("주문 완성! +" .. tostring(order.reward) .. " 코인")
+        log("[Merge] order done | coins=" .. tostring(self.coins))
+
+        -- retire this card and roll a new order in the same slot
+        if order.clickH and isvalid(order.card) then
+            order.card:DisconnectEvent(ButtonClickEvent, order.clickH)
+        end
+        if isvalid(order.card) then order.card:Destroy() end
+        self.orders[order.slot] = nil
+        self:GenerateOrder(order.slot)
+    end
+
+    method void OnEndPlay()
+        -- Release timer, spawner handler, item handlers, order handlers.
+        if self.regenTimer then _TimerService:ClearTimer(self.regenTimer) end
+        if self.spawnerHandler and isvalid(self.spawnerBtn) then
+            self.spawnerBtn.Entity:DisconnectEvent(ButtonClickEvent, self.spawnerHandler)
+        end
+        if self.items then
+            for _, rec in pairs(self.items) do
+                local e = rec.entity
+                if isvalid(e) then
+                    if rec.beginH then e:DisconnectEvent(UITouchBeginDragEvent, rec.beginH) end
+                    if rec.dragH then e:DisconnectEvent(UITouchDragEvent, rec.dragH) end
+                    if rec.endH then e:DisconnectEvent(UITouchEndDragEvent, rec.endH) end
+                end
+            end
+        end
+        if self.orders then
+            for _, order in pairs(self.orders) do
+                if order.clickH and isvalid(order.card) then
+                    order.card:DisconnectEvent(ButtonClickEvent, order.clickH)
+                end
+            end
+        end
+    end
+
+end
