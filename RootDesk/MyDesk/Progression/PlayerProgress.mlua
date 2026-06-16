@@ -1,0 +1,162 @@
+@Logic
+script PlayerProgress extends Logic
+
+    -- ============================================================
+    -- Server-authoritative player progression (level / XP / region).
+    -- Persisted per-user in UserDataStorage; client keeps a read-only
+    -- cache that the server pushes via the ReceiveProgress RPC.
+    -- ============================================================
+
+    -- ---- Client-side cache (the local player's own values) ----
+    property integer Level = 1
+    property integer Xp = 0                 -- XP accumulated inside the current level
+    property integer XpForNext = 80         -- XP needed to reach the next level
+    property integer CurrentRegion = 1
+
+    -- ---- Server-side state ----
+    property any progressByUser = nil       -- userId -> { level, xp, currentRegion }
+    property any dirtyUsers = nil            -- userId -> boolean (needs flush)
+    property integer flushTimer = 0
+    property number FLUSH_INTERVAL = 30.0    -- debounce: persist dirty users every 30s
+    property string STORAGE_KEY = "merge_progress_v1"
+
+    method void OnInitialize()
+        -- Allocate the server tables once (harmless no-op on the client).
+        self.progressByUser = {}
+        self.dirtyUsers = {}
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Start the debounced persistence flush (event-driven saves only; never per-frame).
+        self.flushTimer = _TimerService:SetTimerRepeat(self.FlushDirty, self.FLUSH_INTERVAL)
+        log("[Progress] server OnBeginPlay | flush every " .. tostring(self.FLUSH_INTERVAL) .. "s")
+    end
+
+    @ExecSpace("ServerOnly")
+    method void OnEndPlay()
+        -- Release the timer and persist any pending changes on shutdown.
+        if self.flushTimer ~= 0 then _TimerService:ClearTimer(self.flushTimer) end
+        self:FlushDirty()
+    end
+
+    method integer XpForLevel(integer level)
+        -- XP required to advance from `level` to `level + 1` (gentle early curve).
+        return 80 + (level - 1) * 60
+    end
+
+    @ExecSpace("ServerOnly")
+    method table GetOrLoad(string userId)
+        -- Return the cached progress for userId, loading it from UserDataStorage once.
+        -- Lazily ensure server tables: OnInitialize does not reliably populate them
+        -- on the server RPC context, so every server entry point re-checks here.
+        if self.progressByUser == nil then self.progressByUser = {} end
+        if self.dirtyUsers == nil then self.dirtyUsers = {} end
+        local p = self.progressByUser[userId]
+        if p ~= nil then return p end
+
+        p = { level = 1, xp = 0, currentRegion = 1 }
+        local storage = _DataStorageService:GetUserDataStorage(userId)
+        if isvalid(storage) then
+            local errorCode, raw = storage:GetAndWait(self.STORAGE_KEY)
+            if errorCode == 0 and raw ~= nil and raw ~= "" then
+                local t = _UtilLogic:StringToTable(raw)
+                if t ~= nil then
+                    p.level = t.level or 1
+                    p.xp = t.xp or 0
+                    p.currentRegion = t.currentRegion or 1
+                end
+            end
+            log("[Progress] load user=" .. userId .. " code=" .. tostring(errorCode)
+                .. " -> lvl=" .. tostring(p.level) .. " xp=" .. tostring(p.xp) .. " region=" .. tostring(p.currentRegion))
+        end
+        self.progressByUser[userId] = p
+        return p
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FlushUser(string userId)
+        -- Persist one user's progress if it changed (dirty check + async write).
+        if self.dirtyUsers == nil or not self.dirtyUsers[userId] then return end
+        local p = self.progressByUser[userId]
+        if p == nil then return end
+        self.dirtyUsers[userId] = false
+
+        local storage = _DataStorageService:GetUserDataStorage(userId)
+        if not isvalid(storage) then return end
+        local raw = _UtilLogic:TableToString({ level = p.level, xp = p.xp, currentRegion = p.currentRegion })
+        storage:SetAsync(self.STORAGE_KEY, raw, function(errorCode, key)
+            if errorCode ~= 0 then
+                log_warning("[Progress] save FAILED user=" .. userId .. " code=" .. tostring(errorCode))
+            end
+        end)
+    end
+
+    @ExecSpace("ServerOnly")
+    method void FlushDirty()
+        -- Periodic flush of every user marked dirty since the last tick.
+        if self.dirtyUsers == nil then return end
+        for userId, isDirty in pairs(self.dirtyUsers) do
+            if isDirty then self:FlushUser(userId) end
+        end
+    end
+
+    @ExecSpace("Server")
+    method void RequestProgress()
+        -- Client requests its persisted progress; reply only to that client.
+        local p = self:GetOrLoad(senderUserId)
+        self:ReceiveProgress(p.level, p.xp, self:XpForLevel(p.level), p.currentRegion, false, senderUserId)
+    end
+
+    @ExecSpace("Server")
+    method void AddXp(integer amount)
+        -- Award XP, resolve any level-ups, persist on level-up, push the new state back.
+        if amount <= 0 then return end
+        local p = self:GetOrLoad(senderUserId)
+        p.xp = p.xp + amount
+        local leveledUp = false
+        while p.xp >= self:XpForLevel(p.level) do
+            p.xp = p.xp - self:XpForLevel(p.level)
+            p.level = p.level + 1
+            leveledUp = true
+        end
+        self.dirtyUsers[senderUserId] = true
+        if leveledUp then self:FlushUser(senderUserId) end   -- level-up is a meaningful save point
+        log("[Progress] AddXp user=" .. senderUserId .. " +" .. tostring(amount)
+            .. " -> lvl=" .. tostring(p.level) .. " xp=" .. tostring(p.xp) .. " up=" .. tostring(leveledUp))
+        self:ReceiveProgress(p.level, p.xp, self:XpForLevel(p.level), p.currentRegion, leveledUp, senderUserId)
+    end
+
+    @ExecSpace("Server")
+    method void SetCurrentRegion(integer regionId)
+        -- Record which region the player travelled into (persist immediately; rare event).
+        local p = self:GetOrLoad(senderUserId)
+        if p.currentRegion ~= regionId then
+            p.currentRegion = regionId
+            self.dirtyUsers[senderUserId] = true
+            self:FlushUser(senderUserId)
+        end
+        self:ReceiveProgress(p.level, p.xp, self:XpForLevel(p.level), p.currentRegion, false, senderUserId)
+    end
+
+    @ExecSpace("Client")
+    method void ReceiveProgress(integer level, integer xp, integer xpForNext, integer currentRegion, boolean leveledUp)
+        -- Runs on the target client: refresh the local cache and notify UI listeners.
+        self.Level = level
+        self.Xp = xp
+        self.XpForNext = xpForNext
+        self.CurrentRegion = currentRegion
+
+        local ev = ProgressUpdatedEvent()
+        ev.Level = level
+        ev.Xp = xp
+        ev.XpForNext = xpForNext
+        ev.CurrentRegion = currentRegion
+        ev.LeveledUp = leveledUp
+        self:SendEvent(ev)
+
+        log("[Progress] client recv lvl=" .. tostring(level) .. " xp=" .. tostring(xp) .. "/" .. tostring(xpForNext)
+            .. " region=" .. tostring(currentRegion) .. " up=" .. tostring(leveledUp))
+    end
+
+end

@@ -13,6 +13,11 @@ script MergeBoardController extends Component
     property Entity orderBar = "512c7a4e-fbd6-4d78-8ac1-0e113664d9f9"               -- order-card container
     property Entity orderCardTemplate = "6cee1bbc-8c5d-4d59-946d-bb305915df1c"      -- hidden order card, cloned per order
     property TextComponent statusText = "409fbb5e-5173-41de-a6d1-4a40c5f00abf"      -- footer feedback line
+    property TextComponent levelText = "552eb2d0-063c-4205-9b83-94dd93fe3e2d"                                            -- "Lv N" badge
+    property SpriteGUIRendererComponent xpFill = "a06b4957-a6f8-49d6-8ef7-d63ced16e7a5"                                  -- XP progress bar (Filled)
+    property TextComponent regionLabel = "8a934c1d-1bba-403f-9314-013a71f7cb01"                                          -- current region name
+    property ButtonComponent worldMapBtn = "48f2d025-c600-4b7d-975e-013a8e35eea0"                                        -- opens the world map
+    property WorldMapController worldMap = "5b5e1009-8c82-4d1c-9c09-e1dfd6cb56ef"                                        -- world-map overlay controller
 
     -- ============ Tunables ============
     property integer COLS = 7
@@ -29,6 +34,8 @@ script MergeBoardController extends Component
     -- ============ Runtime state (client only, not synced) ============
     property any regenTimer = nil
     property any spawnerHandler = nil
+    property any worldMapHandler = nil
+    property any progressHandler = nil
     property any config = nil
     property any board = nil
     property any items = nil
@@ -59,6 +66,15 @@ script MergeBoardController extends Component
         if isvalid(self.spawnerBtn) then
             self.spawnerHandler = self.spawnerBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnSpawnerClick)
         end
+
+        -- world-map navigation
+        if isvalid(self.worldMapBtn) then
+            self.worldMapHandler = self.worldMapBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnWorldMapClick)
+        end
+
+        -- progression: listen for level/XP/region updates, then request our saved state from the server
+        self.progressHandler = _PlayerProgress:ConnectEvent(ProgressUpdatedEvent, self.OnProgressUpdated)
+        _PlayerProgress:RequestProgress()
 
         self:UpdateCoin()
         self:UpdateEnergy()
@@ -438,6 +454,7 @@ script MergeBoardController extends Component
         self:RemoveItem(rec)
         self.coins = self.coins + order.reward
         self:UpdateCoin()
+        _PlayerProgress:AddXp(order.reward)             -- orders also grant XP toward the next level
         self:ShowMsg("주문 완성! +" .. tostring(order.reward) .. " 코인")
         log("[Merge] order done | coins=" .. tostring(self.coins))
 
@@ -450,11 +467,56 @@ script MergeBoardController extends Component
         self:GenerateOrder(order.slot)
     end
 
+    -- ============ Progression / navigation ============
+    method void OnWorldMapClick()
+        -- Open the world-map region-select overlay.
+        if isvalid(self.worldMap) then self.worldMap:Open() end
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnProgressUpdated(ProgressUpdatedEvent event)
+        -- Refresh the level badge + XP bar, update the region label, celebrate level-ups.
+        if isvalid(self.levelText) then
+            self.levelText.Text = "Lv " .. tostring(event.Level)
+        end
+        if isvalid(self.xpFill) then
+            local denom = event.XpForNext
+            if denom <= 0 then denom = 1 end
+            self.xpFill.FillAmount = event.Xp / denom
+        end
+        self:UpdateRegionLabel(event.CurrentRegion)
+        if event.LeveledUp then
+            self:ShowMsg("레벨 업! Lv " .. tostring(event.Level) .. " 달성 🎉")
+        end
+    end
+
+    method void UpdateRegionLabel(integer regionId)
+        -- Show the current region's name (queried from the world-map controller).
+        if not isvalid(self.regionLabel) then return end
+        local name = "여행지"
+        if isvalid(self.worldMap) then name = self.worldMap:GetRegionName(regionId) end
+        self.regionLabel.Text = "📍 " .. name
+    end
+
+    method void OnRegionEntered(integer regionId)
+        -- Called by the world map when the player travels into a region.
+        self:UpdateRegionLabel(regionId)
+        if isvalid(self.worldMap) then
+            self:ShowMsg(self.worldMap:GetRegionName(regionId) .. "에 도착했어요!")
+        end
+    end
+
     method void OnEndPlay()
         -- Release timer, spawner handler, item handlers, order handlers.
         if self.regenTimer then _TimerService:ClearTimer(self.regenTimer) end
         if self.spawnerHandler and isvalid(self.spawnerBtn) then
             self.spawnerBtn.Entity:DisconnectEvent(ButtonClickEvent, self.spawnerHandler)
+        end
+        if self.worldMapHandler and isvalid(self.worldMapBtn) then
+            self.worldMapBtn.Entity:DisconnectEvent(ButtonClickEvent, self.worldMapHandler)
+        end
+        if self.progressHandler then
+            _PlayerProgress:DisconnectEvent(ProgressUpdatedEvent, self.progressHandler)
         end
         if self.items then
             for _, rec in pairs(self.items) do

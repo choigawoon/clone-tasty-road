@@ -1,0 +1,23 @@
+{
+  "Id": "",
+  "GameId": "",
+  "EntryKey": "directory://8c14f2f1e99e419ca31629d1ef8d68e2",
+  "ContentType": "x-mod/directory",
+  "Content": "",
+  "Usage": 0,
+  "UsePublish": 1,
+  "UseService": 0,
+  "CoreVersion": "26.5.0.0",
+  "StudioVersion": "",
+  "DynamicLoading": 0,
+  "ContentProto": {
+    "Use": "Json",
+    "Json": {
+      "entry_id": "directory://8c14f2f1e99e419ca31629d1ef8d68e2",
+      "name": "Progression",
+      "lock": false,
+      "folding": false,
+      "nameEditable": true
+    }
+  }
+}

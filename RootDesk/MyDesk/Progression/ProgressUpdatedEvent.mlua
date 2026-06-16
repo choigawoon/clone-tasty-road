@@ -1,0 +1,13 @@
+@Event
+script ProgressUpdatedEvent extends EventType
+
+    -- Fired on the client by PlayerProgress whenever the local player's
+    -- progression changes. UI controllers subscribe via
+    -- _PlayerProgress:ConnectEvent(ProgressUpdatedEvent, handler).
+    property integer Level = 1
+    property integer Xp = 0
+    property integer XpForNext = 1
+    property integer CurrentRegion = 1
+    property boolean LeveledUp = false
+
+end

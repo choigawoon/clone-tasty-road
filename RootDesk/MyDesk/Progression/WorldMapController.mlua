@@ -1,0 +1,213 @@
+@Component
+@ExecSpace("ClientOnly")
+script WorldMapController extends Component
+
+    -- ============================================================
+    -- World-map region-select overlay. Lives on an always-enabled
+    -- entity inside DefaultGroup; toggles its own screen panel.
+    -- Region cards unlock purely by player level.
+    -- ============================================================
+
+    -- ---- Injected UI references (UUIDs filled by UIBuilder bind) ----
+    property Entity screen = "c05fc00f-66b1-43a4-9748-20d28316c89f"                 -- WorldMapScreen overlay panel (shown/hidden)
+    property Entity listContainer = "08cb269c-d70a-4e89-9ea1-b2db1d53c772"          -- container that region cards are parented under
+    property Entity cardTemplate = "030f131e-3365-4db3-8143-f53da98712c0"           -- hidden card, cloned per region
+    property TextComponent subtitleText = "d07e03f9-3507-4c28-9eea-69d375469657"    -- "Lv N · 지역을 선택하세요"
+    property ButtonComponent closeBtn = "28573505-b269-4878-a500-0b5399054bcb"      -- back-to-game button
+    property MergeBoardController game = "42b20016-1383-458b-8b03-9000f5669692"      -- the merge board controller (for messages / region label)
+
+    -- ---- Tunables ----
+    property number CARD_H = 220
+    property number CARD_GAP = 26
+
+    -- ---- Runtime state ----
+    property any regions = nil                  -- ordered region config
+    property any cards = nil                    -- regionId -> { entity, region }
+    property any clickHandlers = nil            -- list of { entity, handler }
+    property any closeHandler = nil
+    property any progressHandler = nil
+    property integer curLevel = 1
+    property integer curRegion = 1
+
+    method void OnBeginPlay()
+        -- Build region config + cards, wire events, then hide the overlay.
+        log("[WorldMap] OnBeginPlay start")
+        self.regions = self:BuildRegions()
+        self.cards = {}
+        self.clickHandlers = {}
+
+        if isvalid(self.cardTemplate) then self.cardTemplate:SetEnable(false) end
+        self:BuildCards()
+
+        if isvalid(self.closeBtn) then
+            self.closeHandler = self.closeBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnCloseClick)
+        end
+
+        -- React to progress changes (level-up may unlock new regions while the map is open).
+        self.progressHandler = _PlayerProgress:ConnectEvent(ProgressUpdatedEvent, self.OnProgressUpdated)
+
+        -- Seed from whatever the client cache already holds, then hide.
+        self.curLevel = _PlayerProgress.Level
+        self.curRegion = _PlayerProgress.CurrentRegion
+        self:RefreshCards()
+        if isvalid(self.screen) then self.screen:SetEnable(false) end
+        log("[WorldMap] OnBeginPlay done | regions=" .. tostring(#self.regions))
+    end
+
+    method table BuildRegions()
+        -- Ordered list of travel regions. Unlock = player level >= req.
+        -- Icons reuse the existing food-chain RUIDs so visuals stay consistent.
+        local r = {}
+        r[1] = { id = 1, name = "분식 거리",   req = 1, icon = "15baa6d07f77442ab47a1526b26b5cd6" }  -- 빵
+        r[2] = { id = 2, name = "햄버거 타운", req = 2, icon = "7dc29f14c2c6486badbd5688cf8103a3" }  -- 햄버거
+        r[3] = { id = 3, name = "피자 항구",   req = 4, icon = "a452cf22cd1c4bf8ae877cb61e153814" }  -- 피자
+        r[4] = { id = 4, name = "디저트 정원", req = 6, icon = "7d42def25d6347ce9cc41976fb18a364" }  -- 케이크
+        r[5] = { id = 5, name = "미식의 수도", req = 9, icon = "e3aaa0ed27d24d6faf044b648b58cd2b" }  -- 화로
+        return r
+    end
+
+    method void SetSprite(SpriteGUIRendererComponent comp, string ruid)
+        -- Assign a sprite RUID to a UI renderer.
+        comp.ImageRUID = DataRef(ruid)
+    end
+
+    method void BuildCards()
+        -- Clone one card per region into the list container and lay them out vertically.
+        if not isvalid(self.cardTemplate) then
+            log_warning("[WorldMap] cardTemplate missing")
+            return
+        end
+        local n = #self.regions
+        local totalH = n * self.CARD_H + (n - 1) * self.CARD_GAP
+        local topY = totalH / 2 - self.CARD_H / 2
+
+        for i = 1, n do
+            local region = self.regions[i]
+            local card = self.cardTemplate:Clone("Card_" .. tostring(region.id))
+            card:SetEnable(true)
+            card.UITransformComponent.anchoredPosition = Vector2(0, topY - (i - 1) * (self.CARD_H + self.CARD_GAP))
+
+            local icon = card:GetChildByName("Icon", true)
+            if isvalid(icon) then self:SetSprite(icon.SpriteGUIRendererComponent, region.icon) end
+            local nameText = card:GetChildByName("Name", true)
+            if isvalid(nameText) then nameText.TextComponent.Text = region.name end
+
+            local capturedId = region.id
+            local h = card:ConnectEvent(ButtonClickEvent, function() self:OnCardClick(capturedId) end)
+            table.insert(self.clickHandlers, { entity = card, eventHandler = h })
+
+            self.cards[region.id] = { entity = card, region = region }
+        end
+    end
+
+    method table FindRegion(integer regionId)
+        -- Region config by id, or nil.
+        for _, region in ipairs(self.regions) do
+            if region.id == regionId then return region end
+        end
+        return nil
+    end
+
+    method string GetRegionName(integer regionId)
+        -- Public: display name of a region (used by the merge board header).
+        local region = self:FindRegion(regionId)
+        if region == nil then return "?" end
+        return region.name
+    end
+
+    method void RefreshCards()
+        -- Repaint every card's locked / unlocked / travelling state from curLevel.
+        if self.cards == nil then return end
+        for _, entry in pairs(self.cards) do
+            local card = entry.entity
+            local region = entry.region
+            if isvalid(card) then
+                local locked = self.curLevel < region.req
+                local sprite = card.SpriteGUIRendererComponent
+                if locked then
+                    sprite.Color = Color(0.45, 0.45, 0.5, 1)
+                elseif region.id == self.curRegion then
+                    sprite.Color = Color(1.0, 0.86, 0.45, 1)        -- highlight current region
+                else
+                    sprite.Color = Color(1.0, 1.0, 1.0, 1)
+                end
+
+                local status = card:GetChildByName("Status", true)
+                if isvalid(status) then
+                    if locked then
+                        status.TextComponent.Text = "🔒 Lv " .. tostring(region.req) .. " 필요"
+                    elseif region.id == self.curRegion then
+                        status.TextComponent.Text = "여행 중"
+                    else
+                        status.TextComponent.Text = "입장하기"
+                    end
+                end
+            end
+        end
+
+        if isvalid(self.subtitleText) then
+            self.subtitleText.Text = "Lv " .. tostring(self.curLevel) .. " · 지역을 선택하세요"
+        end
+    end
+
+    method void Open()
+        -- Show the overlay (called by the merge board's world-map button).
+        self.curLevel = _PlayerProgress.Level
+        self.curRegion = _PlayerProgress.CurrentRegion
+        self:RefreshCards()
+        if isvalid(self.screen) then self.screen:SetEnable(true) end
+        log("[WorldMap] Open | lvl=" .. tostring(self.curLevel) .. " region=" .. tostring(self.curRegion))
+    end
+
+    method void Close()
+        -- Hide the overlay and return to the merge board.
+        if isvalid(self.screen) then self.screen:SetEnable(false) end
+        log("[WorldMap] Close")
+    end
+
+    method void OnCloseClick()
+        -- Back button handler.
+        self:Close()
+    end
+
+    method void OnCardClick(integer regionId)
+        -- Enter an unlocked region; refuse locked ones with a message.
+        local region = self:FindRegion(regionId)
+        if region == nil then return end
+        if self.curLevel < region.req then
+            if isvalid(self.game) then
+                self.game:ShowMsg(region.name .. "은(는) Lv " .. tostring(region.req) .. " 부터 갈 수 있어요!")
+            end
+            log("[WorldMap] locked region " .. tostring(regionId) .. " req=" .. tostring(region.req))
+            return
+        end
+        _PlayerProgress:SetCurrentRegion(regionId)
+        if isvalid(self.game) then self.game:OnRegionEntered(regionId) end
+        self:Close()
+        log("[WorldMap] enter region " .. tostring(regionId))
+    end
+
+    @ExecSpace("ClientOnly")
+    method void OnProgressUpdated(ProgressUpdatedEvent event)
+        -- Keep the local level / region in sync and repaint the cards.
+        self.curLevel = event.Level
+        self.curRegion = event.CurrentRegion
+        self:RefreshCards()
+    end
+
+    method void OnEndPlay()
+        -- Release every event handler.
+        if self.clickHandlers then
+            for _, h in ipairs(self.clickHandlers) do
+                if isvalid(h.entity) then h.entity:DisconnectEvent(ButtonClickEvent, h.eventHandler) end
+            end
+        end
+        if self.closeHandler and isvalid(self.closeBtn) then
+            self.closeBtn.Entity:DisconnectEvent(ButtonClickEvent, self.closeHandler)
+        end
+        if self.progressHandler then
+            _PlayerProgress:DisconnectEvent(ProgressUpdatedEvent, self.progressHandler)
+        end
+    end
+
+end
