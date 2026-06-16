@@ -189,6 +189,8 @@ script MergeBoardController extends Component
         rec.row = r
         rec.col = c
         rec.flying = true
+        rec.grabDX = 0          -- pointer->item offset captured at drag start (BoardArea-local units)
+        rec.grabDY = 0
 
         self:ApplyItemVisual(rec)
 
@@ -253,20 +255,32 @@ script MergeBoardController extends Component
     end
 
     -- ============ Drag handling ============
+    method Vector2 TouchToBoardLocal(Vector2 screenPoint)
+        -- Convert a screen touch point into BoardArea-local UI units (the space anchoredPosition lives in).
+        -- This is resolution-independent, so the item tracks the finger 1:1 instead of lagging.
+        local boardT = self.boardArea.UITransformComponent
+        return _UILogic:ScreenToLocalUIPosition(screenPoint, boardT)
+    end
+
     method void OnItemBeginDrag(UITouchBeginDragEvent event)
-        -- Lift the dragged item above its siblings.
+        -- Lift the item above siblings and remember where on it the pointer grabbed, so it
+        -- follows the cursor exactly (keeping that grab offset) instead of snapping or drifting.
         local rec = self.items[event.Entity.Id]
         if rec == nil then return end
         _UILogic:SetSiblingIndex(rec.entity.UITransformComponent, 1000000)
+        local localPt = self:TouchToBoardLocal(event.TouchPoint)
+        local cur = rec.entity.UITransformComponent.anchoredPosition
+        rec.grabDX = cur.x - localPt.x
+        rec.grabDY = cur.y - localPt.y
     end
 
     method void OnItemDrag(UITouchDragEvent event)
-        -- Follow the pointer by accumulating the touch delta.
+        -- Track the pointer exactly: use the absolute touch point (not the per-frame delta) so the
+        -- item never falls behind the cursor on screens that don't render at the 1080x1920 reference.
         local rec = self.items[event.Entity.Id]
         if rec == nil then return end
-        local t = rec.entity.UITransformComponent
-        local p = t.anchoredPosition
-        t.anchoredPosition = Vector2(p.x + event.TouchDelta.x, p.y + event.TouchDelta.y)
+        local localPt = self:TouchToBoardLocal(event.TouchPoint)
+        rec.entity.UITransformComponent.anchoredPosition = Vector2(localPt.x + rec.grabDX, localPt.y + rec.grabDY)
     end
 
     method void OnItemEndDrag(UITouchEndDragEvent event)
