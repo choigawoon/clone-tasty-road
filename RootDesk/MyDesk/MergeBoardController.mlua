@@ -24,6 +24,7 @@ script MergeBoardController extends Component
     property number ENERGY_REGEN = 10           -- seconds per +1 energy
     property integer SPAWN_COST = 1
     property integer ORDER_SLOTS = 3
+    property number SPAWN_FLY_TIME = 0.32         -- seconds for an item to fly from the spawner into its cell
 
     -- ============ Runtime state (client only, not synced) ============
     property any regenTimer = nil
@@ -174,7 +175,7 @@ script MergeBoardController extends Component
     end
 
     method void SpawnItem(string chain, integer tier, integer r, integer c)
-        -- Clone the item template, place it at a cell and wire drag handling.
+        -- Clone the item template, fly it from the spawner into its cell, then wire drag handling on landing.
         self.itemSeq = self.itemSeq + 1
         local name = "Item_" .. tostring(self.itemSeq)
         local e = self.itemTemplate:Clone(name)
@@ -187,23 +188,52 @@ script MergeBoardController extends Component
         rec.tier = tier
         rec.row = r
         rec.col = c
+        rec.flying = true
 
         self:ApplyItemVisual(rec)
-        local center = self:CellCenter(r, c)
-        e.UITransformComponent.anchoredPosition = center
 
+        -- reserve the cell + register immediately so FindEmptyCell / orders see it during flight
         self.board[self:IndexOf(r, c)] = rec
         self.items[rec.id] = rec
 
+        -- launch: start at the spawner cell, pop the scale, then fly to the target cell
+        local target = self:CellCenter(r, c)
+        local start = self:CellCenter(self.SPAWNER_R, self.SPAWNER_C)
+        local t = e.UITransformComponent
+        t.anchoredPosition = start
+        t.UIScale = Vector3(0.5, 0.5, 1)
+
+        local moveTw = _TweenLogic:PlayTween(start, target, self.SPAWN_FLY_TIME, EaseType.QuartEaseOut,
+            function(v)
+                if isvalid(e) then e.UITransformComponent.anchoredPosition = v end
+            end)
+        moveTw:SetOnEndCallback(function() self:OnItemLanded(rec, target) end)
+
+        _TweenLogic:PlayTween(0.5, 1.0, self.SPAWN_FLY_TIME, EaseType.BackEaseOut,
+            function(s)
+                if isvalid(e) then e.UITransformComponent.UIScale = Vector3(s, s, 1) end
+            end)
+    end
+
+    method void OnItemLanded(table rec, Vector2 target)
+        -- Finalize a freshly spawned item: snap exactly to its cell, reset scale, enable dragging.
+        local e = rec.entity
+        if not isvalid(e) then return end
+        local t = e.UITransformComponent
+        t.anchoredPosition = target
+        t.UIScale = Vector3(1, 1, 1)
+        rec.flying = false
         rec.beginH = e:ConnectEvent(UITouchBeginDragEvent, self.OnItemBeginDrag)
         rec.dragH = e:ConnectEvent(UITouchDragEvent, self.OnItemDrag)
         rec.endH = e:ConnectEvent(UITouchEndDragEvent, self.OnItemEndDrag)
     end
 
     method void ApplyItemVisual(table rec)
-        -- Set the item sprite to match its current chain/tier.
+        -- Set the item sprite to match its current chain/tier, filling the (already centered) cell rect.
+        -- PreserveSprite=None centers the picture inside its rect; AspectOnly top-anchors it, which made items look high.
         local sprite = rec.entity.SpriteGUIRendererComponent
         self:SetSprite(sprite, self:TierRuid(rec.chain, rec.tier))
+        sprite.PreserveSprite = PreserveSpriteType.None
     end
 
     method void RemoveItem(table rec)
