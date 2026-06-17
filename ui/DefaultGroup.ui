@@ -1152,7 +1152,7 @@
               "EndFrameIndex": 2147483647,
               "IgnoreMapLayerCheck": false,
               "ImageRUID": {
-                "DataId": "4fea64a3307cda641809ad8be0d4890b"
+                "DataId": "872235faeeb6420b9d2551a0c8a53a71"
               },
               "LocalPosition": {
                 "x": 0,
@@ -1170,9 +1170,9 @@
               "SortingLayer": "UI",
               "StartFrameIndex": 0,
               "Color": {
-                "r": 0.141176477,
-                "g": 0.105882354,
-                "b": 0.180392161,
+                "r": 1,
+                "g": 1,
+                "b": 1,
                 "a": 1
               },
               "DropShadow": false,
@@ -1202,7 +1202,7 @@
                 "a": 1
               },
               "OutlineWidth": 3,
-              "RaycastTarget": true,
+              "RaycastTarget": false,
               "Type": 0,
               "Enable": true
             }
