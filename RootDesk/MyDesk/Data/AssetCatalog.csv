@@ -1,0 +1,11 @@
+Key,RUID,Category,Subcategory,SourceFile,DisplayName,Note
+ui_background_portrait,872235faeeb6420b9d2551a0c8a53a71,sprite,background,output/assets/tasty-road-ui-background-portrait.png,Tasty Road UI Portrait Background,Uploaded custom portrait background
+food_t1_apple,263b7db3067545a7acf7bbe5c3b61a4c,sprite,item,,사과,Merge tier 1 icon
+food_t2_bread,15baa6d07f77442ab47a1526b26b5cd6,sprite,item,,빵,Merge tier 2 icon
+food_t3_burger,7dc29f14c2c6486badbd5688cf8103a3,sprite,item,,햄버거,Merge tier 3 icon
+food_t4_pizza,a452cf22cd1c4bf8ae877cb61e153814,sprite,item,,피자,Merge tier 4 icon
+food_t5_cake,7d42def25d6347ce9cc41976fb18a364,sprite,item,,케이크,Merge tier 5 icon
+spawner_brazier,e3aaa0ed27d24d6faf044b648b58cd2b,sprite,item,,휴대용 화로,Spawner icon
+ui_panel_dark,4fea64a3307cda641809ad8be0d4890b,sprite,ui,,어두운 패널,Shared UI panel sprite
+ui_coin_icon,02a489cccff24a139a6c3582a5871f58,sprite,ui,,코인 아이콘,Header coin icon
+ui_energy_icon,4564eabe4d6e422fabe7104c08308b25,sprite,ui,,에너지 아이콘,Header energy icon

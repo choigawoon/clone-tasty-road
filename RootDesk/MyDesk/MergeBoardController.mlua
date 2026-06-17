@@ -92,26 +92,116 @@ script MergeBoardController extends Component
     end
 
     method table BuildConfig()
-        -- Returns merge-chain + spawner + reward config. Single food chain for MVP.
+        -- Load merge-chain + spawner + reward config from UserDataSet CSV files.
         local cfg = {}
+        cfg.assets = self:LoadAssetCatalog()
+        cfg.chains = {}
+        cfg.spawner = { chain = "food", icon = self:GetAssetRuid(cfg.assets, "spawner_brazier"), energyCost = self.SPAWN_COST }
+
+        local ds = _DataService:GetTable("MergeTierConfig")
+        if ds == nil then
+            log_warning("[MergeConfig] MergeTierConfig dataset missing; using fallback config")
+            return self:BuildFallbackConfig(cfg.assets)
+        end
+
+        local rows = ds:GetRowCount()
+        for row = 1, rows do
+            local rowType = ds:GetCell(row, "Type")
+            local chain = ds:GetCell(row, "Chain")
+            if chain == nil or chain == "" then chain = "food" end
+
+            if rowType == "tier" then
+                local tier = self:ToInt(ds:GetCell(row, "Tier"), 0)
+                if tier > 0 then
+                    if cfg.chains[chain] == nil then
+                        cfg.chains[chain] = { name = "푸드", tierNames = {}, tiers = {}, rewards = {} }
+                    end
+                    cfg.chains[chain].tierNames[tier] = ds:GetCell(row, "Name")
+                    cfg.chains[chain].tiers[tier] = self:GetAssetRuid(cfg.assets, ds:GetCell(row, "AssetKey"))
+                    cfg.chains[chain].rewards[tier] = self:ToInt(ds:GetCell(row, "Reward"), tier * 25)
+                end
+            elseif rowType == "spawner" then
+                cfg.spawner.chain = chain
+                cfg.spawner.icon = self:GetAssetRuid(cfg.assets, ds:GetCell(row, "AssetKey"))
+                cfg.spawner.energyCost = self:ToInt(ds:GetCell(row, "EnergyCost"), self.SPAWN_COST)
+            end
+        end
+
+        if cfg.chains["food"] == nil or #cfg.chains["food"].tiers == 0 then
+            log_warning("[MergeConfig] MergeTierConfig has no food tiers; using fallback config")
+            return self:BuildFallbackConfig(cfg.assets)
+        end
+        log("[MergeConfig] loaded assets=" .. tostring(self:TableCount(cfg.assets)) .. " mergeRows=" .. tostring(rows)
+            .. " foodTiers=" .. tostring(#cfg.chains["food"].tiers))
+        return cfg
+    end
+
+    method table LoadAssetCatalog()
+        -- Load asset key to RUID mapping from AssetCatalog.csv.
+        local assets = {}
+        local ds = _DataService:GetTable("AssetCatalog")
+        if ds == nil then
+            log_warning("[AssetCatalog] dataset missing")
+            return assets
+        end
+        local rows = ds:GetRowCount()
+        for row = 1, rows do
+            local key = ds:GetCell(row, "Key")
+            local ruid = ds:GetCell(row, "RUID")
+            if key ~= nil and key ~= "" and ruid ~= nil and ruid ~= "" then
+                assets[key] = ruid
+            end
+        end
+        return assets
+    end
+
+    method string GetAssetRuid(table assets, string key)
+        -- Resolve an asset key to a RUID, returning an empty string when unmapped.
+        if assets == nil or key == nil or key == "" then return "" end
+        local ruid = assets[key]
+        if ruid == nil then
+            log_warning("[AssetCatalog] missing key=" .. key)
+            return ""
+        end
+        return ruid
+    end
+
+    method integer ToInt(string value, integer fallback)
+        -- Parse a dataset string as an integer with a fallback.
+        local n = tonumber(value)
+        if n == nil then return fallback end
+        return math.floor(n)
+    end
+
+    method integer TableCount(table t)
+        -- Count key/value pairs in a Lua table.
+        if t == nil then return 0 end
+        local count = 0
+        for key, _ in pairs(t) do
+            count = count + 1
+        end
+        return count
+    end
+
+    method table BuildFallbackConfig(table assets)
+        -- Last-resort defaults used only when the CSV datasets are unavailable.
+        local cfg = {}
+        cfg.assets = assets
         cfg.chains = {
             food = {
                 name = "푸드",
                 tierNames = { "사과", "빵", "햄버거", "피자", "케이크" },
                 tiers = {
-                    "263b7db3067545a7acf7bbe5c3b61a4c",   -- T1 사과
-                    "15baa6d07f77442ab47a1526b26b5cd6",   -- T2 빵
-                    "7dc29f14c2c6486badbd5688cf8103a3",   -- T3 햄버거
-                    "a452cf22cd1c4bf8ae877cb61e153814",   -- T4 피자
-                    "7d42def25d6347ce9cc41976fb18a364",   -- T5 케이크
+                    self:GetAssetRuid(assets, "food_t1_apple"),
+                    self:GetAssetRuid(assets, "food_t2_bread"),
+                    self:GetAssetRuid(assets, "food_t3_burger"),
+                    self:GetAssetRuid(assets, "food_t4_pizza"),
+                    self:GetAssetRuid(assets, "food_t5_cake"),
                 },
+                rewards = { 25, 50, 75, 100, 125 },
             },
         }
-        cfg.spawner = {
-            chain = "food",
-            icon = "e3aaa0ed27d24d6faf044b648b58cd2b",     -- 휴대용 화로
-            energyCost = self.SPAWN_COST,
-        }
+        cfg.spawner = { chain = "food", icon = self:GetAssetRuid(assets, "spawner_brazier"), energyCost = self.SPAWN_COST }
         return cfg
     end
 
@@ -150,6 +240,13 @@ script MergeBoardController extends Component
     method string TierRuid(string chain, integer tier)
         -- RUID for a chain tier.
         return self.config.chains[chain].tiers[tier]
+    end
+
+    method integer TierReward(string chain, integer tier)
+        -- Coin/XP reward configured for a chain tier.
+        local rewards = self.config.chains[chain].rewards
+        if rewards == nil or rewards[tier] == nil then return tier * 25 end
+        return rewards[tier]
     end
 
     method integer MaxTier(string chain)
@@ -397,7 +494,7 @@ script MergeBoardController extends Component
         local chain = "food"
         local maxT = self:MaxTier(chain)
         local tier = _UtilLogic:RandomIntegerRange(2, maxT)
-        local reward = tier * 25
+        local reward = self:TierReward(chain, tier)
 
         local card = self.orderCardTemplate:Clone("Order_" .. tostring(slot))
         card:SetEnable(true)

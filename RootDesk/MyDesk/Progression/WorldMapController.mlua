@@ -55,14 +55,87 @@ script WorldMapController extends Component
     end
 
     method table BuildRegions()
-        -- Ordered list of travel regions. Unlock = player level >= req.
-        -- Icons reuse the existing food-chain RUIDs so visuals stay consistent.
+        -- Load the ordered travel region list from UserDataSet CSV files.
         local r = {}
-        r[1] = { id = 1, name = "분식 거리",   req = 1, icon = "15baa6d07f77442ab47a1526b26b5cd6" }  -- 빵
-        r[2] = { id = 2, name = "햄버거 타운", req = 2, icon = "7dc29f14c2c6486badbd5688cf8103a3" }  -- 햄버거
-        r[3] = { id = 3, name = "피자 항구",   req = 4, icon = "a452cf22cd1c4bf8ae877cb61e153814" }  -- 피자
-        r[4] = { id = 4, name = "디저트 정원", req = 6, icon = "7d42def25d6347ce9cc41976fb18a364" }  -- 케이크
-        r[5] = { id = 5, name = "미식의 수도", req = 9, icon = "e3aaa0ed27d24d6faf044b648b58cd2b" }  -- 화로
+        local assets = self:LoadAssetCatalog()
+        local ds = _DataService:GetTable("WorldRegionConfig")
+        if ds == nil then
+            log_warning("[WorldMapConfig] WorldRegionConfig dataset missing; using fallback regions")
+            return self:BuildFallbackRegions(assets)
+        end
+
+        local rows = ds:GetRowCount()
+        for row = 1, rows do
+            local id = self:ToInt(ds:GetCell(row, "RegionId"), row)
+            local name = ds:GetCell(row, "Name")
+            local req = self:ToInt(ds:GetCell(row, "RequiredLevel"), 1)
+            local icon = self:GetAssetRuid(assets, ds:GetCell(row, "IconAssetKey"))
+            r[#r + 1] = { id = id, name = name, req = req, icon = icon }
+        end
+
+        if #r == 0 then
+            log_warning("[WorldMapConfig] WorldRegionConfig has no rows; using fallback regions")
+            return self:BuildFallbackRegions(assets)
+        end
+        log("[WorldMapConfig] loaded assets=" .. tostring(self:TableCount(assets)) .. " regions=" .. tostring(#r))
+        return r
+    end
+
+    method table LoadAssetCatalog()
+        -- Load asset key to RUID mapping from AssetCatalog.csv.
+        local assets = {}
+        local ds = _DataService:GetTable("AssetCatalog")
+        if ds == nil then
+            log_warning("[AssetCatalog] dataset missing")
+            return assets
+        end
+        local rows = ds:GetRowCount()
+        for row = 1, rows do
+            local key = ds:GetCell(row, "Key")
+            local ruid = ds:GetCell(row, "RUID")
+            if key ~= nil and key ~= "" and ruid ~= nil and ruid ~= "" then
+                assets[key] = ruid
+            end
+        end
+        return assets
+    end
+
+    method string GetAssetRuid(table assets, string key)
+        -- Resolve an asset key to a RUID, returning an empty string when unmapped.
+        if assets == nil or key == nil or key == "" then return "" end
+        local ruid = assets[key]
+        if ruid == nil then
+            log_warning("[AssetCatalog] missing key=" .. key)
+            return ""
+        end
+        return ruid
+    end
+
+    method integer ToInt(string value, integer fallback)
+        -- Parse a dataset string as an integer with a fallback.
+        local n = tonumber(value)
+        if n == nil then return fallback end
+        return math.floor(n)
+    end
+
+    method integer TableCount(table t)
+        -- Count key/value pairs in a Lua table.
+        if t == nil then return 0 end
+        local count = 0
+        for key, _ in pairs(t) do
+            count = count + 1
+        end
+        return count
+    end
+
+    method table BuildFallbackRegions(table assets)
+        -- Last-resort defaults used only when the CSV datasets are unavailable.
+        local r = {}
+        r[1] = { id = 1, name = "분식 거리", req = 1, icon = self:GetAssetRuid(assets, "food_t2_bread") }
+        r[2] = { id = 2, name = "햄버거 타운", req = 2, icon = self:GetAssetRuid(assets, "food_t3_burger") }
+        r[3] = { id = 3, name = "피자 항구", req = 4, icon = self:GetAssetRuid(assets, "food_t4_pizza") }
+        r[4] = { id = 4, name = "디저트 정원", req = 6, icon = self:GetAssetRuid(assets, "food_t5_cake") }
+        r[5] = { id = 5, name = "미식의 수도", req = 9, icon = self:GetAssetRuid(assets, "spawner_brazier") }
         return r
     end
 
