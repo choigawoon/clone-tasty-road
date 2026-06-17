@@ -9,3 +9,4 @@ spawner_brazier,e3aaa0ed27d24d6faf044b648b58cd2b,sprite,item,,휴대용 화로,S
 ui_panel_dark,4fea64a3307cda641809ad8be0d4890b,sprite,ui,,어두운 패널,Shared UI panel sprite
 ui_coin_icon,02a489cccff24a139a6c3582a5871f58,sprite,ui,,코인 아이콘,Header coin icon
 ui_energy_icon,4564eabe4d6e422fabe7104c08308b25,sprite,ui,,에너지 아이콘,Header energy icon
+world_item_energy_100_thumbnail,2fb7158dd512428fb5555f62eabdae72,worlditem,thumbnail,output/assets/energy-pack-100.png,에너지 100 상품 썸네일,World item product 6OTWM20V1

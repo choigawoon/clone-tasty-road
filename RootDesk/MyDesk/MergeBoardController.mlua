@@ -18,6 +18,11 @@ script MergeBoardController extends Component
     property TextComponent regionLabel = "8a934c1d-1bba-403f-9314-013a71f7cb01"                                          -- current region name
     property ButtonComponent worldMapBtn = "48f2d025-c600-4b7d-975e-013a8e35eea0"                                        -- opens the world map
     property WorldMapController worldMap = "5b5e1009-8c82-4d1c-9c09-e1dfd6cb56ef"                                        -- world-map overlay controller
+    property Entity energyShopPanel = "feb8cc8a-e5b9-4e52-9cec-7aeb42c8294f"                                                                                  -- world-coin energy purchase modal
+    property TextComponent energyShopTitle = "03e0c0ae-f15a-404d-a849-43518537b90d"
+    property TextComponent energyShopDesc = "7e7e38f1-f545-4e83-940d-d8d6d87a0ada"
+    property ButtonComponent energyShopBuyBtn = "e5f67f6a-8c8a-44b3-b144-9660cb532592"
+    property ButtonComponent energyShopCloseBtn = "31bffd23-aac8-4c34-8ce7-a58ac504f5c1"
 
     -- ============ Tunables ============
     property integer COLS = 7
@@ -35,6 +40,8 @@ script MergeBoardController extends Component
     property any regenTimer = nil
     property any spawnerHandler = nil
     property any worldMapHandler = nil
+    property any energyShopBuyHandler = nil
+    property any energyShopCloseHandler = nil
     property any progressHandler = nil
     property any config = nil
     property any board = nil
@@ -71,6 +78,13 @@ script MergeBoardController extends Component
         if isvalid(self.worldMapBtn) then
             self.worldMapHandler = self.worldMapBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnWorldMapClick)
         end
+        if isvalid(self.energyShopBuyBtn) then
+            self.energyShopBuyHandler = self.energyShopBuyBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnEnergyShopBuyClick)
+        end
+        if isvalid(self.energyShopCloseBtn) then
+            self.energyShopCloseHandler = self.energyShopCloseBtn.Entity:ConnectEvent(ButtonClickEvent, self.OnEnergyShopCloseClick)
+        end
+        self:HideEnergyShop()
 
         -- progression: listen for level/XP/region updates, then request our saved state from the server
         self.progressHandler = _PlayerProgress:ConnectEvent(ProgressUpdatedEvent, self.OnProgressUpdated)
@@ -96,7 +110,14 @@ script MergeBoardController extends Component
         local cfg = {}
         cfg.assets = self:LoadAssetCatalog()
         cfg.chains = {}
-        cfg.spawner = { chain = "food", icon = self:GetAssetRuid(cfg.assets, "spawner_brazier"), energyCost = self.SPAWN_COST }
+        cfg.spawner = {
+            chain = "food",
+            icon = self:GetAssetRuid(cfg.assets, "spawner_brazier"),
+            energyCost = self.SPAWN_COST,
+            energyPackAmount = 100,
+            energyPackPrice = 100,
+            worldProductId = "",
+        }
 
         local ds = _DataService:GetTable("MergeTierConfig")
         if ds == nil then
@@ -124,6 +145,9 @@ script MergeBoardController extends Component
                 cfg.spawner.chain = chain
                 cfg.spawner.icon = self:GetAssetRuid(cfg.assets, ds:GetCell(row, "AssetKey"))
                 cfg.spawner.energyCost = self:ToInt(ds:GetCell(row, "EnergyCost"), self.SPAWN_COST)
+                cfg.spawner.energyPackAmount = self:ToInt(ds:GetCell(row, "EnergyPackAmount"), 100)
+                cfg.spawner.energyPackPrice = self:ToInt(ds:GetCell(row, "EnergyPackPrice"), 100)
+                cfg.spawner.worldProductId = ds:GetCell(row, "WorldProductId") or ""
             end
         end
 
@@ -132,7 +156,8 @@ script MergeBoardController extends Component
             return self:BuildFallbackConfig(cfg.assets)
         end
         log("[MergeConfig] loaded assets=" .. tostring(self:TableCount(cfg.assets)) .. " mergeRows=" .. tostring(rows)
-            .. " foodTiers=" .. tostring(#cfg.chains["food"].tiers))
+            .. " foodTiers=" .. tostring(#cfg.chains["food"].tiers)
+            .. " energyPack=" .. tostring(cfg.spawner.energyPackAmount) .. "/" .. tostring(cfg.spawner.energyPackPrice))
         return cfg
     end
 
@@ -201,7 +226,14 @@ script MergeBoardController extends Component
                 rewards = { 25, 50, 75, 100, 125 },
             },
         }
-        cfg.spawner = { chain = "food", icon = self:GetAssetRuid(assets, "spawner_brazier"), energyCost = self.SPAWN_COST }
+        cfg.spawner = {
+            chain = "food",
+            icon = self:GetAssetRuid(assets, "spawner_brazier"),
+            energyCost = self.SPAWN_COST,
+            energyPackAmount = 100,
+            energyPackPrice = 100,
+            worldProductId = "",
+        }
         return cfg
     end
 
@@ -259,7 +291,7 @@ script MergeBoardController extends Component
         -- Spend energy to drop a tier-1 ingredient into a free cell.
         log("[Merge] spawner clicked | energy=" .. tostring(self.energy))
         if self.energy < self.config.spawner.energyCost then
-            self:ShowMsg("에너지가 부족해요! 잠시 기다려 주세요.")
+            self:ShowEnergyShop()
             return
         end
         local idx = self:FindEmptyCell()
@@ -273,6 +305,61 @@ script MergeBoardController extends Component
         self:UpdateEnergy()
         self:SpawnItem(self.config.spawner.chain, 1, r, c)
         log("[Merge] spawned tier1 at (" .. tostring(r) .. "," .. tostring(c) .. ")")
+    end
+
+    method boolean TryBuyEnergyPack()
+        -- Deprecated local coin purchase path; world-coin purchases are handled by the shop modal.
+        self:ShowEnergyShop()
+        return true
+    end
+
+    method void ShowEnergyShop()
+        -- Show the world-coin energy purchase modal.
+        local amount = self.config.spawner.energyPackAmount or 0
+        local price = self.config.spawner.energyPackPrice or 0
+        if isvalid(self.energyShopTitle) then
+            self.energyShopTitle.Text = "에너지 충전"
+        end
+        if isvalid(self.energyShopDesc) then
+            self.energyShopDesc.Text = "에너지 +" .. tostring(amount) .. " / 월드코인 " .. tostring(price)
+        end
+        if isvalid(self.energyShopPanel) then self.energyShopPanel:SetEnable(true) end
+        self:ShowMsg("에너지가 부족해요. 월드코인으로 에너지를 충전할 수 있어요.")
+        log("[Merge] open energy shop | amount=" .. tostring(amount) .. " price=" .. tostring(price))
+    end
+
+    method void HideEnergyShop()
+        -- Hide the energy purchase modal.
+        if isvalid(self.energyShopPanel) then self.energyShopPanel:SetEnable(false) end
+    end
+
+    method void OnEnergyShopCloseClick()
+        -- Close the energy purchase modal.
+        self:HideEnergyShop()
+    end
+
+    method void OnEnergyShopBuyClick()
+        -- Open the native WorldShop purchase prompt for the configured energy product.
+        local productId = self.config.spawner.worldProductId
+        if productId == nil or productId == "" then
+            self:ShowMsg("에너지 상품이 아직 등록되지 않았어요.")
+            log_warning("[Merge] energy product id empty")
+            return
+        end
+        _WorldShopService:PromptPurchase(productId)
+        log("[Merge] prompt worldshop purchase product=" .. productId)
+    end
+
+    method void AddPurchasedEnergy(integer amount, string productId, string purchaseId)
+        -- Apply energy granted by the server-side WorldShop purchase callback.
+        if amount <= 0 then return end
+        self.energy = self.energy + amount
+        self:UpdateEnergy()
+        self:HideEnergyShop()
+        self:ShowMsg("에너지 +" .. tostring(amount) .. " 충전 완료!")
+        log("[Merge] purchased energy granted | +" .. tostring(amount)
+            .. " product=" .. tostring(productId) .. " purchase=" .. tostring(purchaseId)
+            .. " energy=" .. tostring(self.energy))
     end
 
     method integer FindEmptyCell()
@@ -466,7 +553,9 @@ script MergeBoardController extends Component
     method void UpdateEnergy()
         -- Refresh the energy bar fill + label.
         if isvalid(self.energyFill) then
-            self.energyFill.FillAmount = self.energy / self.ENERGY_MAX
+            local fill = self.energy / self.ENERGY_MAX
+            if fill > 1 then fill = 1 end
+            self.energyFill.FillAmount = fill
         end
         if isvalid(self.energyText) then
             self.energyText.Text = tostring(self.energy) .. " / " .. tostring(self.ENERGY_MAX)
@@ -611,6 +700,12 @@ script MergeBoardController extends Component
         end
         if self.worldMapHandler and isvalid(self.worldMapBtn) then
             self.worldMapBtn.Entity:DisconnectEvent(ButtonClickEvent, self.worldMapHandler)
+        end
+        if self.energyShopBuyHandler and isvalid(self.energyShopBuyBtn) then
+            self.energyShopBuyBtn.Entity:DisconnectEvent(ButtonClickEvent, self.energyShopBuyHandler)
+        end
+        if self.energyShopCloseHandler and isvalid(self.energyShopCloseBtn) then
+            self.energyShopCloseBtn.Entity:DisconnectEvent(ButtonClickEvent, self.energyShopCloseHandler)
         end
         if self.progressHandler then
             _PlayerProgress:DisconnectEvent(ProgressUpdatedEvent, self.progressHandler)

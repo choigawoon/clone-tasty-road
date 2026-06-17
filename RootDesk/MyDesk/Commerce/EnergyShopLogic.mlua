@@ -1,0 +1,75 @@
+@Logic
+script EnergyShopLogic extends Logic
+
+    property string EnergyProductId = ""
+    property integer EnergyAmount = 100
+
+    @ExecSpace("ServerOnly")
+    method void OnBeginPlay()
+        -- Register the WorldShop purchase processor for energy products.
+        self:LoadConfig()
+        _WorldShopService:SetProcessPurchaseCallback(self.ProcessPurchase)
+        log("[EnergyShop] callback registered product=" .. self.EnergyProductId .. " amount=" .. tostring(self.EnergyAmount))
+    end
+
+    method void LoadConfig()
+        -- Load world-shop product id and reward amount from MergeTierConfig.
+        local ds = _DataService:GetTable("MergeTierConfig")
+        if ds == nil then
+            log_warning("[EnergyShop] MergeTierConfig dataset missing")
+            return
+        end
+        local rows = ds:GetRowCount()
+        for row = 1, rows do
+            if ds:GetCell(row, "Type") == "spawner" then
+                self.EnergyProductId = ds:GetCell(row, "WorldProductId") or ""
+                self.EnergyAmount = self:ToInt(ds:GetCell(row, "EnergyPackAmount"), self.EnergyAmount)
+                return
+            end
+        end
+    end
+
+    method integer ToInt(string value, integer fallback)
+        -- Parse a dataset string as an integer with a fallback.
+        local n = tonumber(value)
+        if n == nil then return fallback end
+        return math.floor(n)
+    end
+
+    @ExecSpace("ServerOnly")
+    method boolean ProcessPurchase(WorldShopPurchaseInfo purchaseInfo)
+        -- Validate and grant an energy product purchase.
+        if purchaseInfo == nil then return false end
+        if self.EnergyProductId == nil or self.EnergyProductId == "" then
+            log_warning("[EnergyShop] product id is empty")
+            return false
+        end
+        if purchaseInfo.ProductId ~= self.EnergyProductId then
+            log_warning("[EnergyShop] unknown product=" .. tostring(purchaseInfo.ProductId))
+            return false
+        end
+
+        self:GrantEnergy(self.EnergyAmount, purchaseInfo.ProductId, purchaseInfo.PurchaseId, purchaseInfo.UserId)
+        log("[EnergyShop] purchase processed user=" .. tostring(purchaseInfo.UserId)
+            .. " product=" .. tostring(purchaseInfo.ProductId) .. " amount=" .. tostring(self.EnergyAmount))
+        return true
+    end
+
+    @ExecSpace("Client")
+    method void GrantEnergy(integer amount, string productId, string purchaseId)
+        -- Apply the purchased energy on the buyer's client-side merge controller.
+        local e = _EntityService:GetEntityByPath("/ui/DefaultGroup/Controller")
+        if e == nil then
+            log_error("[EnergyShop] Controller not found on client")
+            return
+        end
+        ---@type MergeBoardController
+        local c = e:GetComponent("script.MergeBoardController")
+        if c == nil then
+            log_error("[EnergyShop] MergeBoardController not found on client")
+            return
+        end
+        c:AddPurchasedEnergy(amount, productId, purchaseId)
+    end
+
+end
