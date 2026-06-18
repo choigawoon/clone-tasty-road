@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🎨 Concept Studio — clone-tasty-road</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🎨 Concept Studio <span class="sub">메이플 비비드 · 아트 디렉션 기반</span></div>
+    <div class="status" id="status">연결 확인 중…</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="concept">컨셉아트</button>
+    <button class="tab" data-tab="screens">화면 목업</button>
+    <button class="tab" data-tab="gallery">갤러리</button>
+  </nav>
+
+  <main>
+    <!-- ============ CONCEPT / SCREENS share the composer ============ -->
+    <section class="panel" id="composer">
+      <div class="composer-grid">
+        <div class="picker">
+          <label class="field-label">대상 선택</label>
+          <div id="subjectList" class="chip-groups"></div>
+        </div>
+
+        <div class="controls">
+          <label class="field-label" for="promptBox">프롬프트 (편집 가능)</label>
+          <textarea id="promptBox" rows="6" placeholder="대상을 선택하면 아트 디렉션 기반 프롬프트가 채워집니다. 자유롭게 수정하세요."></textarea>
+
+          <label class="field-label" for="extraBox">추가 지시 (선택)</label>
+          <input id="extraBox" type="text" placeholder="예: 정면 포즈, 봄 분위기, 더 통통하게…" />
+
+          <div class="row">
+            <div class="col">
+              <label class="field-label" for="workflowSel">워크플로우</label>
+              <select id="workflowSel"></select>
+            </div>
+            <div class="col">
+              <label class="field-label" for="aspectSel">비율</label>
+              <select id="aspectSel"></select>
+            </div>
+            <div class="col narrow">
+              <label class="field-label" for="seedBox">시드</label>
+              <input id="seedBox" type="number" placeholder="랜덤" />
+            </div>
+          </div>
+
+          <details class="neg">
+            <summary>네거티브 프롬프트</summary>
+            <textarea id="negBox" rows="3"></textarea>
+          </details>
+
+          <div class="actions">
+            <button id="genBtn" class="primary">✨ 생성</button>
+            <span id="genHint" class="hint"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel results-panel">
+      <h2 class="results-title">결과</h2>
+      <div id="results" class="results"></div>
+    </section>
+
+    <!-- ============ GALLERY ============ -->
+    <section class="panel hidden" id="galleryPanel">
+      <div class="gallery-head">
+        <h2 class="results-title">최근 생성물 (genai outputs)</h2>
+        <button id="refreshGallery" class="ghost">새로고침</button>
+      </div>
+      <div id="gallery" class="gallery"></div>
+    </section>
+  </main>
+
+  <div id="lightbox" class="lightbox hidden"><img id="lightboxImg" src="" alt="" /></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -13,4 +13,4 @@
 **/.DS_Store
 
 # --- Scratch / scratch builder dumps ---
-.builder-work/inspect.cjs
+.builder-work/
