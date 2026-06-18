@@ -10,3 +10,4 @@ ui_panel_dark,4fea64a3307cda641809ad8be0d4890b,sprite,ui,,어두운 패널,Share
 ui_coin_icon,02a489cccff24a139a6c3582a5871f58,sprite,ui,,코인 아이콘,Header coin icon
 ui_energy_icon,4564eabe4d6e422fabe7104c08308b25,sprite,ui,,에너지 아이콘,Header energy icon
 world_item_energy_100_thumbnail,2fb7158dd512428fb5555f62eabdae72,worlditem,thumbnail,output/assets/energy-pack-100.png,에너지 100 상품 썸네일,World item product 6OTWM20V1
+bg_slimeforest,f7c66cde41df4dceb44b07683f78cb22,sprite,background,concept-art/bg_slimeforest-2026-06-18T14-27-57.png,슬라임 숲 로딩 배경,Loading screen background (generated concept art)

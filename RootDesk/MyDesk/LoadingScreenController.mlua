@@ -1,0 +1,103 @@
+@Component
+@ExecSpace("ClientOnly")
+script LoadingScreenController extends Component
+    -- UI references (UUIDs injected by UIBuilder bind).
+    property Entity loadingGroup = "9ca4f988-66d7-407a-aa8c-a1f628e64e55"
+    property SpriteGUIRendererComponent barFill = "a666753f-a82d-4053-bb27-6dd637a5abfc"
+    property TextComponent loadingText = "8eeed478-fc4e-48f3-b4da-1cce208fc450"
+    property TextComponent percentText = "5bd1ea2e-f302-479a-987a-6a03e4184fcb"
+
+    -- Tunables (seconds).
+    property number loadTime = 2.5
+    property number holdTime = 0.35
+    property number fadeTime = 0.6
+
+    -- Internal state (not shown in inspector).
+    @HideFromInspector property number elapsed = 0
+    @HideFromInspector property integer phase = 0
+    @HideFromInspector property any timerId = nil
+
+    method void OnBeginPlay()
+        -- Loading-screen intro: fill the bar, hold, fade out, then reveal the game.
+        log("[LoadingScreen] OnBeginPlay - start")
+        self.elapsed = 0
+        self.phase = 0   -- 0 fill, 1 hold, 2 fade, 3 done
+
+        if isvalid(self.barFill) then
+            self.barFill.FillAmount = 0
+        end
+        if isvalid(self.loadingGroup) and isvalid(self.loadingGroup.CanvasGroupComponent) then
+            self.loadingGroup.CanvasGroupComponent.GroupAlpha = 1
+        end
+
+        local preTime = _UtilLogic.ElapsedSeconds
+        self.timerId = _TimerService:SetTimerRepeat(function()
+            local now = _UtilLogic.ElapsedSeconds
+            local delta = now - preTime
+            preTime = now
+            self:Tick(delta)
+        end, 1 / 60)
+    end
+
+    method void Tick(number delta)
+        -- Advances the loading animation one frame.
+        self.elapsed = self.elapsed + delta
+
+        if self.phase == 0 then
+            local p = self.elapsed / self.loadTime
+            if p > 1 then p = 1 end
+            if isvalid(self.barFill) then
+                self.barFill.FillAmount = p
+            end
+            if isvalid(self.percentText) then
+                self.percentText.Text = tostring(math.floor(p * 100)) .. "%"
+            end
+            if p >= 1 then
+                self.phase = 1
+                self.elapsed = 0
+                if isvalid(self.loadingText) then
+                    self.loadingText.Text = "완료!"
+                end
+                log("[LoadingScreen] bar full -> hold")
+            end
+
+        elseif self.phase == 1 then
+            if self.elapsed >= self.holdTime then
+                self.phase = 2
+                self.elapsed = 0
+                log("[LoadingScreen] hold done -> fade")
+            end
+
+        elseif self.phase == 2 then
+            local f = self.elapsed / self.fadeTime
+            if f > 1 then f = 1 end
+            if isvalid(self.loadingGroup) and isvalid(self.loadingGroup.CanvasGroupComponent) then
+                self.loadingGroup.CanvasGroupComponent.GroupAlpha = 1 - f
+            end
+            if f >= 1 then
+                self:Finish()
+            end
+        end
+    end
+
+    method void Finish()
+        -- Stops the timer and hides the whole loading group, revealing the game.
+        log("[LoadingScreen] fade complete - hiding group")
+        self.phase = 3
+        if self.timerId ~= nil then
+            _TimerService:ClearTimer(self.timerId)
+            self.timerId = nil
+        end
+        if isvalid(self.loadingGroup) then
+            self.loadingGroup.Enable = false
+        end
+    end
+
+    method void OnEndPlay()
+        -- Cleanup any running timer.
+        if self.timerId ~= nil then
+            _TimerService:ClearTimer(self.timerId)
+            self.timerId = nil
+        end
+    end
+end
