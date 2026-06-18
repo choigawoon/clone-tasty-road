@@ -1,4 +1,4 @@
-Type,Chain,Tier,Name,AssetKey,EnergyCost,EnergyPackAmount,EnergyPackPrice,WorldProductId,OrderEnabled,Reward
+﻿Type,Chain,Tier,Name,AssetKey,EnergyCost,EnergyPackAmount,EnergyPackPrice,WorldProductId,OrderEnabled,Reward
 spawner,food,0,화로,spawner_brazier,1,100,100,6OTWM20V1,false,0
 tier,food,1,사과,food_t1_apple,,,,,false,25
 tier,food,2,빵,food_t2_bread,,,,,true,50

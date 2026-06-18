@@ -1,4 +1,4 @@
-Key,RUID,Category,Subcategory,SourceFile,DisplayName,Note
+﻿Key,RUID,Category,Subcategory,SourceFile,DisplayName,Note
 ui_background_portrait,872235faeeb6420b9d2551a0c8a53a71,sprite,background,output/assets/tasty-road-ui-background-portrait.png,Tasty Road UI Portrait Background,Uploaded custom portrait background
 food_t1_apple,263b7db3067545a7acf7bbe5c3b61a4c,sprite,item,,사과,Merge tier 1 icon
 food_t2_bread,15baa6d07f77442ab47a1526b26b5cd6,sprite,item,,빵,Merge tier 2 icon

@@ -1,4 +1,4 @@
-RegionId,Name,RequiredLevel,IconAssetKey
+﻿RegionId,Name,RequiredLevel,IconAssetKey
 1,분식 거리,1,food_t2_bread
 2,햄버거 타운,2,food_t3_burger
 3,피자 항구,4,food_t4_pizza
